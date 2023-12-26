@@ -1,137 +1,296 @@
-# Define the function to start the Cloudflare DNS update process
-function Start-CloudFlairDNSUpdate {
-    [CmdletBinding()]
-    param(
-        # Specify the Cloudflare account email address
-        [Parameter(Mandatory=$true)]
-        [string]$AuthEmail,
-
-        # Specify the Cloudflare account API key
-        [Parameter(Mandatory=$true)]
-        [string]$AuthKey,
-
-        # Specify the path to the CSV file containing the DNS records to update
-        [Parameter(Mandatory=$true)]
-        [string]$FactsPath
-    )
-
-    # Get the current public IP address
-    $CurrentIP = (Invoke-RestMethod -Uri "https://api.ipify.org?format=json").ip
-
-    # Load the DNS records from the CSV file
-    $HostList = Import-Csv -Path $FactsPath -Delimiter `t
-
-    # Iterate through the DNS records
-    foreach ($SingleHost in $HostList) {
-        # Check if the IP address of the DNS record needs to be updated
-        if ($SingleHost.IPAddress -ne $CurrentIP) {
-            # Update the DNS record
-            Update-CloudflareDns -ZoneId $SingleHost.ZoneId -RecordId $SingleHost.RecordId -Name $SingleHost.Name -AuthEmail $AuthEmail -AuthKey $AuthKey -RecordType $SingleHost.Type -IPAddress $CurrentIP
-
-            # Write a message to indicate that the DNS record was updated
-            Write-Host "$($SingleHost.Name) DNS record updated"
-        }
-        else {
-            # Write a message to indicate that the DNS record is up to date
-            Write-Host "$($SingleHost.Name) DNS record is up to date"
-        }
-    }
-}
-
-# Define the function to get all DNS records from Cloudflare
 function Get-CloudflareDns {
     [CmdletBinding()]
     param(
-        # Specify the Cloudflare account email address
-        [Parameter(Mandatory=$true)]
-        [string]$AuthEmail,
-
-        # Specify the Cloudflare account API key
-        [Parameter(Mandatory=$true)]
-        [string]$AuthKey
+      [Parameter(Mandatory=$true)]
+      [string]$AuthEmail,
+      [Parameter(Mandatory=$true)]
+      [string]$AuthKey
     )
-
-    # Set up the Cloudflare API request headers
-    $Headers = @{
-        'X-Auth-Email' = $AuthEmail
-        'X-Auth-Key' = $AuthKey
-        'Content-Type' = 'application/json'
+  
+    # Set up the request header
+    $header = @{
+      'X-Auth-Email' = "$AuthEmail"
+      'X-Auth-Key' = "$AuthKey"
+      'Content-Type' = "application/json"
     }
-
-    # Initialize an empty list to store the DNS records
-    $Records = @()
-
-    # Get the list of DNS zones
-    $Zones = Get-CloudflareZone -Headers $Headers
-
-    # Iterate through the DNS zones
-    foreach ($Zone in $Zones) {
-        # Get the DNS records for the current zone
-        $ZoneRecords = Get-CloudflareDnsRecord -ZoneId $Zone.Id -Headers $Headers
-
-        # Add the DNS records to the list
-        $Records += $ZoneRecords
+  
+    # Make the request to list the DNS zones
+  
+    $uri = "https://api.cloudflare.com/client/v4/zones?per_page=2"
+    $response = Invoke-WebRequest -Method GET -Uri $uri -Headers $header -UseBasicParsing
+    $json = $response.Content | ConvertFrom-Json  
+    $zones = $json.result
+    if ($json.result_info.total_pages -gt 1){
+      do {
+        $PageToCall = $json.result_info.page + 1
+        $uri = "https://api.cloudflare.com/client/v4/zones?per_page=2&page=$($PageToCall)"
+        $response = Invoke-WebRequest -Method GET -Uri $uri -Headers $header -UseBasicParsing
+        $json = $response.Content | ConvertFrom-Json  
+        $zones += $json.result
+      } until (
+        $json.result_info.total_pages -eq $json.result_info.page
+      )
     }
-
-    # Return the list of DNS records
-    return $Records
-}
-
-# Define the function to update a DNS record in Cloudflare
-function Update-CloudflareDns {
+    $records = @()
+    foreach ($zone in $zones) {
+            [int]$CurrentPage = 1
+            $uri = "https://api.cloudflare.com/client/v4/zones/$($zone.id)/dns_records?per_page=100"
+            $response = Invoke-WebRequest -Method GET -Uri $uri -Headers $header -UseBasicParsing
+            $json = $response.Content | ConvertFrom-Json
+            $records += $json.result
+            if ($json.result_info.page -ne $json.result_info.total_pages){
+              do {
+                start-sleep -Milliseconds 250
+                $CurrentPage = $json.result_info.page + 1
+                $uri = "https://api.cloudflare.com/client/v4/zones/$($zone.id)/dns_records?per_page=100&page=$CurrentPage"
+                $response = Invoke-WebRequest -Method GET -Uri $uri -Headers $header -UseBasicParsing
+                $json = $response.Content | ConvertFrom-Json
+                $records += $json.result
+            } until (
+                $json.result_info.page -eq $json.result_info.total_pages
+            )
+            }
+        } 
+    return $records
+  }
+  
+  
+  
+  function Update-CloudflareDnsContent {
     [CmdletBinding()]
     param(
-        # Specify the Cloudflare zone ID
+      [Parameter(Mandatory=$true)]
+      [string]$ZoneId,
+      [Parameter(Mandatory=$true)]
+      [string]$RecordId,
+      [Parameter(Mandatory=$true)]
+      [string]$Content,
+      [Parameter(Mandatory=$true)]
+      [string]$AuthEmail,
+      [Parameter(Mandatory=$true)]
+      [string]$AuthKey
+    )
+  
+    # Set up the request header and body
+    $header = @{
+      'X-Auth-Email' = "$AuthEmail"
+      'X-Auth-Key' = "$AuthKey"
+      'Content-Type' = "application/json"
+    } | ConvertTo-Json
+    $body = @{
+      content = $Content
+    } | ConvertTo-Json
+  
+    # Make the request to update the DNS record
+    $uri = "https://api.cloudflare.com/client/v4/zones/{$ZoneId}/dns_records/{$RecordId}"
+    $response = Invoke-WebRequest -Method PUT -Uri $uri -Headers $header -Body $body
+  
+    # Check the response status code
+    if ($response.StatusCode -eq 200) {
+      Write-Output "DNS update successful"
+    }
+    else {
+      Write-Output "DNS update failed: $($response.StatusCode) $($response.StatusDescription)"
+    }
+  }
+  
+  
+  function Update-CloudflareDns {
+    [CmdletBinding()]
+    param(
+      [Parameter(Mandatory=$true)]
+      [string]$ZoneId,
+      [Parameter(Mandatory=$true)]
+      [string]$RecordId,
+      [Parameter(Mandatory=$true)]
+      [string]$Name,
+      [Parameter(Mandatory=$true)]
+      [string]$AuthEmail,
+      [Parameter(Mandatory=$true)]
+      [string]$AuthKey,
+      [Parameter(Mandatory=$true)]
+      [string]$Content
+    )
+    $type = 'A'
+    # Set up the request header and body
+    $header = @{
+      'X-Auth-Email' = "$AuthEmail"
+      'X-Auth-Key' = "$AuthKey"
+      'Content-Type' = 'applicationjson'
+    } | ConvertTo-Json
+    $body = @{
+      'type' = "$Type"
+      'name' = "$Name"
+      'content' = "$Content"
+    } | ConvertTo-Json
+  
+    # Make the request to update the DNS record
+    $uri = "https://api.cloudflare.com/client/v4/zones/{$ZoneId}/dns_records/{$RecordId}"
+    $response = Invoke-WebRequest -Method PUT -Uri $uri -Headers $header -Body $body
+  
+    # Check the response status code
+    if ($response.StatusCode -eq 200) {
+      Write-Output "DNS update successful"
+    }
+    else {
+      Write-Output "DNS update failed: $($response.StatusCode) $($response.StatusDescription)"
+    }
+  }
+  
+  
+  function Start-CloudFlairDNSUpdate {
+    [CmdletBinding()]
+    param(
+      [Parameter(Mandatory=$true)]
+      [string]$AuthEmail,
+      [Parameter(Mandatory=$true)]
+      [string]$AuthKey
+    )
+    $HostList = Import-Csv -Path C:\powershell\allinfo.csv -Delimiter `t
+    foreach ($SingleHost in $HostList) {
+        if ((Test-NetConnection $SingleHost.name).RemoteAddress.IPAddressToString -ne ((Invoke-WebRequest -UseBasicParsing -Uri https://ipinfo.io/what-is-my-ip) | ConvertFrom-Json).ip) {
+            write-host "$SingleHost Updating"
+            Update-CloudflareDns -ZoneId $SingleHost.ZoneId -RecordId $SingleHost.RecordId -Name $SingleHost.name -AuthEmail $AuthEmail -AuthKey $AuthKey
+        } else {
+            write-host "$SingleHost good"
+        }
+    }
+  }
+  
+  function Create-CloudflareDnsRecord {
+    [CmdletBinding()]
+    param(
+      [Parameter(Mandatory=$true)]
+      [string]$ZoneId,
+      [Parameter(Mandatory=$true)]
+      [string]$Name,
+      [Parameter(Mandatory=$true)]
+      [string]$Type,
+      [Parameter(Mandatory=$true)]
+      [string]$Content,
+      [Parameter(Mandatory=$true)]
+      [string]$AuthEmail,
+      [Parameter(Mandatory=$true)]
+      [string]$AuthKey
+    )
+  
+    # Set up the request header and body
+    $header = @{
+      'X-Auth-Email' = "$AuthEmail"
+      'X-Auth-Key' = "$AuthKey"
+      'Content-Type' = "application/json"
+    }
+    $body = @{
+      name = $Name
+      type = $Type
+      content = $Content
+    } | ConvertTo-Json
+  
+    # Make the request to create the DNS record
+    $uri = "https://api.cloudflare.com/client/v4/zones/$ZoneId/dns_records"
+    $response = Invoke-WebRequest -Method POST -Uri $uri -Headers $header -Body $body
+  
+    # Check the response status code
+    if ($response.StatusCode -eq 200) {
+      Write-Output "DNS record created successfully"
+    }
+    else {
+      Write-Output "Failed to create DNS record: $($response.StatusCode) $($response.StatusDescription)"
+    }
+  }
+  
+  function Update-CloudflareDnsV2 {
+    [CmdletBinding()]
+    param(
         [Parameter(Mandatory=$true)]
         [string]$ZoneId,
-
-        # Specify the Cloudflare DNS record ID
         [Parameter(Mandatory=$true)]
         [string]$RecordId,
-
-        # Specify the DNS record name
         [Parameter(Mandatory=$true)]
         [string]$Name,
-
-        # Specify the Cloudflare account email address
         [Parameter(Mandatory=$true)]
         [string]$AuthEmail,
-
-        # Specify the Cloudflare account API key
         [Parameter(Mandatory=$true)]
         [string]$AuthKey,
-
-        # Specify the DNS record type (e.g., A, CNAME, TXT)
         [Parameter(Mandatory=$true)]
         [string]$RecordType,
-
-        # Specify the IP address or value to update the DNS record with
         [Parameter(Mandatory=$true)]
-        [string]$IPAddress
+        [string]$Content
     )
-
-    # Set up the Cloudflare API request headers
-    $Headers = @{
+    $Type = $RecordType
+ 
+    # Set up the request header
+    $header = @{
         'X-Auth-Email' = $AuthEmail
         'X-Auth-Key' = $AuthKey
         'Content-Type' = 'application/json'
     }
-
-    # Set up the DNS record update data
-    $RecordData = @{
-        'type' = $RecordType
+ 
+    # Set up the request body
+    $body = @{
+        'type' = $Type
         'name' = $Name
-        'content' = $IPAddress
+        'content' = $Content
     }
-
-    # Update the DNS record
-    $Response = Update-CloudflareDnsRecord -ZoneId $ZoneId -RecordId $RecordId -Headers $Headers -Body $RecordData
-
+ 
+    # Make the request to update the DNS record
+    $uri = "https://api.cloudflare.com/client/v4/zones/$ZoneId/dns_records/$RecordId"
+    $response = Invoke-WebRequest -Method PUT -Uri $uri -Headers $header -Body ($body | ConvertTo-Json)
+ 
     # Check the response status code
-    if ($Response.success -eq $true) {
+    if ($response.StatusCode -eq 200) {
         Write-Output "DNS update successful"
     }
     else {
-        Write-Output "DNS update failed: $($Response.errors[0].code) $($Response.errors[0].message)"
+        Write-Output "DNS update failed: $($response.StatusCode) $($response.StatusDescription)"
     }
-}
+ }
+  
+  function Start-CloudFlairDNSUpdateV2 {
+    [CmdletBinding()]
+    param(
+      [Parameter(Mandatory=$true)]
+      [string]$AuthEmail,
+      [Parameter(Mandatory=$true)]
+      [string]$AuthKey,
+      [Parameter(Mandatory=$true)]
+      [string]$FactsPath
+    )
+    $IpInfoToken = {Your-Token}
+    $CurrentIP = ((Invoke-WebRequest -UseBasicParsing -Uri https://ipinfo.io/what-is-my-ip?token=$IpInfoToken) | ConvertFrom-Json).ip
+    $HostList = Import-Csv -Path $FactsPath -Delimiter `t
+    foreach ($SingleHost in $HostList) {
+        if ((Test-NetConnection $SingleHost.name).RemoteAddress.IPAddressToString -ne $CurrentIP) {
+            write-host "$SingleHost Update required"
+            Update-CloudflareDnsV2 -ZoneId $SingleHost.zone_id -RecordId $SingleHost.id -Name $SingleHost.name -AuthEmail $AuthEmail -AuthKey $AuthKey -RecordType $SingleHost.type -Content $CurrentIP
+        } else {
+            write-host "$SingleHost good"
+        }
+    }
+  }
+  
+  Function get-CloudflairDNSList {
+    [CmdletBinding()]
+    param(
+      [Parameter(Mandatory=$true)]
+      [string]$AuthEmail,
+      [Parameter(Mandatory=$true)]
+      [string]$AuthKey
+    )
+    $DNSList = Get-CloudflareDns -AuthEmail $AuthEmail -AuthKey $AuthKey
+    $Report  = @()
+    foreach ($DNSHost in $DNSList) {
+      $obj = new-object psobject
+      $obj | Add-Member -MemberType NoteProperty -Name id -Value $DNSHost.id
+      $obj | Add-Member -MemberType NoteProperty -Name zone_id -Value $DNSHost.zone_id
+      $obj | Add-Member -MemberType NoteProperty -Name zone_name -Value $DNSHost.userEmail
+      $obj | Add-Member -MemberType NoteProperty -Name name -Value $DNSHost.name
+      $obj | Add-Member -MemberType NoteProperty -Name type -Value $DNSHost.type
+      $obj | Add-Member -MemberType NoteProperty -Name content -Value $DNSHost.content
+      $Report += $obj
+    }
+    return $Report
+  } 
+ 
+
+  Start-CloudFlairDNSUpdateV2  -AuthEmail [email] -AuthKey [apikey] -FactsPath "C:\powershell\allinfo.csv"  
