@@ -34,4 +34,4 @@ Additionally, you need to mount a volume to `/app/data` in the container. This v
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the MIT License LICENSE.
