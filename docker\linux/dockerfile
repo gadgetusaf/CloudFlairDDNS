@@ -1,0 +1,38 @@
+FROM ubuntu:latest
+
+# Install necessary packages
+RUN apt-get update && \
+    apt-get install -y curl jq dnsutils
+
+# Set working directory
+WORKDIR /app
+
+# Copy the scripts to the container
+COPY get-dns.sh /app/
+COPY update.sh /app/
+
+# Make the scripts executable
+RUN chmod +x /app/get-dns.sh && \
+    chmod +x /app/update.sh
+
+# Set environment variables
+ENV EMAIL_ADDRESS=""
+ENV API_TOKEN=""
+ENV FACTS_PATH="/app/dns_records.csv"
+
+# Define the mount point
+VOLUME /app/data
+
+# Run the scripts on container startup
+CMD if [ ! -f "/app/data/dns_records.csv" ]; then \
+        /app/get-dns.sh "$EMAIL_ADDRESS" "$API_TOKEN" && \
+        cp /app/dns_records.csv /app/data/dns_records.csv && \
+        echo "Please update the /app/data/dns_records.csv file with the domains that need to be updated." && \
+        echo "After updating the file, restart the container to start the update process."; \
+    else \
+        cp /app/data/dns_records.csv /app/dns_records.csv && \
+        while true; do \
+            /app/update.sh -e "$EMAIL_ADDRESS" -k "$API_TOKEN" -f "$FACTS_PATH"; \
+            sleep 600; \
+        done; \
+    fi
