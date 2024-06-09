@@ -38,7 +38,7 @@ start_cloudflare_dns_update_v2() {
     local facts_path="$3"
     local verbose="$4"
 
-    local current_ip=$(curl -s https://ipinfo.io/ip)
+    local current_ip=$(dig TXT +short o-o.myaddr.l.ipv4.google.com @ns1.google.com | tr -d '"')
     if [ -z "$current_ip" ]; then
         echo "Failed to retrieve current IP address"
         exit 1

@@ -148,7 +148,7 @@ function Get-CloudflareDns {
     )
     $HostList = Import-Csv -Path C:\powershell\allinfo.csv -Delimiter `t
     foreach ($SingleHost in $HostList) {
-        if ((Test-NetConnection $SingleHost.name).RemoteAddress.IPAddressToString -ne ((Invoke-WebRequest -UseBasicParsing -Uri https://ipinfo.io/what-is-my-ip) | ConvertFrom-Json).ip) {
+        if ((Test-NetConnection $SingleHost.name).RemoteAddress.IPAddressToString -ne (Resolve-DnsName  o-o.myaddr.l.ipv4.google.com -Type TXT -Server (Resolve-DnsName ns1.google.com -Type a).IPAddress).Strings) {
             write-host "$SingleHost Updating"
             Update-CloudflareDns -ZoneId $SingleHost.ZoneId -RecordId $SingleHost.RecordId -Name $SingleHost.name -AuthEmail $AuthEmail -AuthKey $AuthKey
         } else {
@@ -256,8 +256,7 @@ function Get-CloudflareDns {
       [Parameter(Mandatory=$true)]
       [string]$FactsPath
     )
-    $IpInfoToken = {Your-Token}
-    $CurrentIP = ((Invoke-WebRequest -UseBasicParsing -Uri https://ipinfo.io/what-is-my-ip?token=$IpInfoToken) | ConvertFrom-Json).ip
+    $CurrentIP = (Resolve-DnsName  o-o.myaddr.l.ipv4.google.com -Type TXT -Server (Resolve-DnsName ns1.google.com -Type a).IPAddress).Strings
     $HostList = Import-Csv -Path $FactsPath -Delimiter `t
     foreach ($SingleHost in $HostList) {
         if ((Test-NetConnection $SingleHost.name).RemoteAddress.IPAddressToString -ne $CurrentIP) {
