@@ -38,11 +38,23 @@ start_cloudflare_dns_update_v2() {
     local facts_path="$3"
     local verbose="$4"
 
-    local current_ip=$(dig TXT +short o-o.myaddr.l.ipv4.google.com @ns1.google.com | tr -d '"')
+    # Resolve the A record for ns1.google.com
+    local ns1_ip=$(dig +short A ns1.google.com | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+    if [ -z "$ns1_ip" ]; then
+        echo "Failed to retrieve IP address for ns1.google.com"
+        exit 1
+    fi
+
+    echo "Resolved ns1.google.com to IP: $ns1_ip"
+
+    # Use the resolved IP address to dig for the current IP address
+    local current_ip=$(dig +short TXT o-o.myaddr.l.google.com @$ns1_ip | tr -d '"')
     if [ -z "$current_ip" ]; then
         echo "Failed to retrieve current IP address"
         exit 1
     fi
+
+    echo "Current IP address: $current_ip"
 
     if [ ! -f "$facts_path" ]; then
         echo "CSV file not found: $facts_path"
@@ -77,7 +89,7 @@ start_cloudflare_dns_update_v2() {
         fi
 
         # Get IPv4 addresses from dig
-        remote_ips=$(dig +short "$record_name" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+        remote_ips=$(dig +short A "$record_name" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
         match_found=false
         for remote_ip in $remote_ips; do
             if [ "$remote_ip" == "$current_ip" ]; then
